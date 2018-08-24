@@ -13,33 +13,33 @@ import slackweb
 import yaml
 
 
+def merge_dict_add_values(dict_list):
+    return dict(reduce(lambda d1, d2: Counter(d1) + Counter(d2), dict_list))
+
+
 def parser():
-    _parser = argparse.ArgumentParser(description='URLチェッカー')
-    _parser.add_argument('-d', '--date', help='処理種別')
+    _parser = argparse.ArgumentParser(description='Slackえもじカウンター')
+    _parser.add_argument('-d', '--days', help='何日まえからの取得とするか')
 
     return _parser
 
 
-_args = sys.argv[1:]
-_parser = parser()
-args = _parser.parse_args(_args)
-print(21, '*'*50, args.date)
+def get_args():
+    args = sys.argv[1:]
+    _parser = parser()
+    return _parser.parse_args(args)
 
 
-yesterday = (datetime.today() - timedelta(days=1)).timestamp()
-# yesterday = (datetime.today() - timedelta(days=30)).timestamp()
+def get_slack_info():
+    slack_info_file = os.path.dirname(__file__) + 'config/private/slack.yaml'
+    f = open(slack_info_file, 'r')
+    return yaml.load(f)
 
-slack_info_file = os.path.dirname(__file__) + 'config/private/slack.yaml'
-f = open(slack_info_file, 'r')
-slack_info = yaml.load(f)
 
-params_base = {
+slack_info = get_slack_info()
+slack_api_params_base = {
     'token': slack_info.get('token'),
 }
-
-
-def merge_dict_add_values(dict_list):
-    return dict(reduce(lambda d1, d2: Counter(d1) + Counter(d2), dict_list))
 
 
 def execute_api(api, params):
@@ -88,27 +88,28 @@ def notify_slack(text: str) -> None:
 def get_channel_ids():
 
     channels_list_api_base = 'https://slack.com/api/channels.list?'
-    channels_list = execute_api(channels_list_api_base, params_base)
-    # [print(g['name'], g['id']) for g in channels_list['channels']]
+    channels_list = execute_api(channels_list_api_base, slack_api_params_base)
+    [print(g['name'], g['id']) for g in channels_list['channels']]
     return [g['id'] for g in channels_list['channels']]
 
 
 def get_group_ids():
 
     groups_list_api_base = 'https://slack.com/api/groups.list?'
-    groups_list = execute_api(groups_list_api_base, params_base)
+    groups_list = execute_api(groups_list_api_base, slack_api_params_base)
     # [print(g['name'], g['id']) for g in groups_list['groups']]
     return [g['id'] for g in groups_list['groups']]
 
 
-def get_messages(group_id, api_prefix):
+def get_messages(group_id, oldest, api_prefix):
 
     groups_history_api = 'https://slack.com/api/%s.history?' % api_prefix
 
-    groups_history_params = deepcopy(params_base)
+    groups_history_params = deepcopy(slack_api_params_base)
     groups_history_params.update({
         'channel': group_id,
-        'count': 10,
+        'count': 1000,
+        'oldest': oldest,
     })
     message_data = execute_api(groups_history_api, groups_history_params)
     # print(33, message_data)
@@ -116,13 +117,13 @@ def get_messages(group_id, api_prefix):
     return message_data['messages'] if message_data and message_data['messages'] else []
 
 
-def get_emoji(messages):
+def get_emoji(messages, oldest):
     results = {}  # dict
 
     for m in messages:
-        print(107, m)
-        print(97, m['ts'], yesterday, float(m['ts']) < yesterday)
-        if float(m['ts']) < yesterday:
+        # print(107, m)
+        # print(97, m['ts'], oldest, float(m['ts']) < oldest)
+        if float(m['ts']) < oldest:
             continue
         for r in m.get('reactions', []):
             name = r['name']
@@ -134,21 +135,24 @@ def get_emoji(messages):
 
 def exec():
 
+    args = get_args()
+    oldest = (datetime.today() - timedelta(days=int(args.days))).timestamp()
+
     group_ids = get_group_ids()
     # group_ids = []
-    group_ids = group_ids[:10]
-    groups_messages_list = [get_messages(group_id, 'groups') for group_id in group_ids]
+    # group_ids = group_ids[:10]
+    groups_messages_list = [get_messages(group_id, oldest, 'groups') for group_id in group_ids]
     groups_messages = reduce(add, groups_messages_list) if groups_messages_list else []
 
     channel_ids = get_channel_ids()
     # channel_ids = channel_ids[:10]
     channel_ids = []
-    channels_messages_list = [get_messages(channel_id, 'channels') for channel_id in channel_ids]
+    channels_messages_list = [get_messages(channel_id, oldest, 'channels') for channel_id in channel_ids]
     channels_messages = reduce(add, channels_messages_list) if channels_messages_list else []
 
     messages = groups_messages + channels_messages
 
-    results = get_emoji(messages)
+    results = get_emoji(messages, oldest)
     results = sorted(results.items(), key=lambda x: x[1], reverse=True)
     # print(results)
     slack_str = ''
@@ -158,3 +162,4 @@ def exec():
 
 
 exec()
+
